@@ -156,13 +156,14 @@ h1 em{font-style:normal;color:var(--amber)}
 .acts button.wide{grid-column:1 / -1;border-color:rgba(240,166,75,.6);color:var(--amber)}
 
 /* 广告层 */
-.adbox{position:absolute;left:16px;right:16px;top:50%;transform:translateY(-50%);
-  display:none;pointer-events:none}
+.adbox{position:absolute;left:16px;top:58px;right:auto;max-width:70%;
+  display:none;pointer-events:none;background:rgba(10,10,12,.72);border:1px solid rgba(242,238,230,.16);
+  border-radius:3px;padding:8px 10px}
 .adbox.on{display:block}
 .adbox .eyebrow{font-size:10px;letter-spacing:.28em;color:var(--crimson)}
 .adbox .line{margin-top:8px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .adbox .t{font-size:13px;color:#EDE8DE;letter-spacing:.02em}
-.adbox .count{font-size:26px;font-weight:600;color:var(--amber);line-height:1}
+.adbox .count{font-size:17px;font-weight:600;color:var(--amber);line-height:1}
 .adbox .skipbar{flex:1 1 120px;min-width:80px;height:2px;background:rgba(242,238,230,.14);position:relative}
 .adbox .skipbar i{position:absolute;left:0;top:0;bottom:0;background:var(--amber);width:0}
 .adbox .note{margin-top:10px;font-size:11px;color:var(--muted);letter-spacing:.03em}
@@ -1203,6 +1204,7 @@ function makeScreenMaterial(map, grade){
 }
 
 function applyScreenTexture(force){
+  if(adScreenOn) return;           // 广告在屏上时，不让正片贴图把它顶掉
   const vtex = videoFor(state.texId);
   const tex = vtex || textureFor(state.texId);
   if(!tex || !screenMesh) return;
@@ -1304,8 +1306,8 @@ function startPlayback(){
     if(pr && pr.catch) pr.catch(()=>{});
   }
   if(PLANS[state.plan].ads){ PB.phase = 'ad'; PB.adKind = 'pre'; PB.adT = 0; PB.adLen = 5;
-    adGroup.visible = true;
-    adGroup.position.set(pod.position.x, pod.position.y + 0.60, pod.position.z + 0.70);
+    adGroup.visible = false;
+    showAdOnScreen();
     $('#adbox').classList.add('on');
     $('#adText').textContent = '广告播放中 · 片前';
     $('#adNote').textContent = '含广告方案 · 广告不可跳过，升级至标准版可去除广告';
@@ -1314,14 +1316,32 @@ function startPlayback(){
   else { PB.phase = 'content'; }
 }
 
+let adScreenOn = false;
+function showAdOnScreen(){
+  const tex = textureFor('adspot');
+  if(!tex || !screenMesh) return;
+  adScreenOn = true;
+  try{ if(screenMat) screenMat.dispose(); }catch(e){}
+  screenMat = makeScreenMaterial(tex, 'mid');
+  screenMesh.material = screenMat;
+  // 坐在旁边的人，屏幕上也是同一条广告
+  companions.forEach(c=>{
+    const pad = c.userData.pad;
+    if(pad){ pad.material.map = tex; pad.material.needsUpdate = true; }
+  });
+}
+function clearAdOnScreen(){
+  adScreenOn = false;
+  applyScreenTexture(true);
+}
+
 function startAd(kind, len){
   PB.phase = 'ad'; PB.adKind = kind; PB.adT = 0; PB.adLen = len;
   if(kind==='mid') state.midSeen = true; else state.adSeen = true;
   const vcur = document.getElementById('v-' + state.title);
   if(vcur){ try{ vcur.pause(); }catch(e){} }
-  adGroup.visible = true;
-  // 广告牌跟着舱体走：摄像头模式下舱体在 3 米外，写死在原点会跑到镜头后面
-  adGroup.position.set(pod.position.x, pod.position.y + 0.60, pod.position.z + 0.70);
+  adGroup.visible = false;          // 不再往空中另挂一块牌子，广告直接上屏幕
+  showAdOnScreen();
   $('#adbox').classList.add('on');
   $('#adText').textContent = kind==='pre' ? '广告播放中 · 片前' : '广告插播 · 剧情已暂停';
   $('#adNote').textContent = kind==='pre'
@@ -1331,6 +1351,7 @@ function startAd(kind, len){
 
 function endAd(){
   adGroup.visible = false;
+  clearAdOnScreen();
   $('#adbox').classList.remove('on');
   PB.phase = 'content';
   const v = document.getElementById('v-' + state.title);
@@ -1417,6 +1438,7 @@ function syncCompanionPads(){
   companions.forEach(c=>{
     const pad = c.userData.pad;
     if(!pad) return;
+    if(adScreenOn) return;
     const t = videoFor(c.userData.titleId || state.title);
     if(t && pad.material.map !== t){
       pad.material.map = t;
@@ -1741,17 +1763,29 @@ function pickViewerAt(clientX, clientY){
     while(o && !o.userData.viewer) o = o.parent;
     if(o && o.userData.viewer) return o;
   }
-  // 射线打空时按屏幕距离兜底：在人体附近按下也算抓到他，不会串到舱体上
-  const best = {obj:null, d:96};
+  // 射线打空时按投影包围盒兜底：按住头、身子、腿都算抓到他，不会串到舱体上
+  const px = clientX - r.left, py = clientY - r.top;
+  let best = null, bestArea = Infinity;
   companions.forEach(c=>{
-    const w = new THREE.Vector3(); c.getWorldPosition(w);
-    w.y += 1.02 * (c.scale ? c.scale.y : 1);
-    w.project(camera);
-    const sx = (w.x + 1) * 0.5 * r.width, sy = (1 - w.y) * 0.5 * r.height;
-    const d = Math.hypot(sx - (clientX - r.left), sy - (clientY - r.top));
-    if(d < best.d){ best.d = d; best.obj = c; }
+    const box = new THREE.Box3().setFromObject(c);
+    if(!box.isEmpty()){
+      const ctr = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+      const pts = [];
+      for(const sx of [-0.5, 0.5]) for(const sy of [-0.5, 0.5]) for(const sz of [-0.5, 0.5]){
+        pts.push(new THREE.Vector3(ctr.x + size.x*sx, ctr.y + size.y*sy, ctr.z + size.z*sz).project(camera));
+      }
+      const xs = pts.map(v=>(v.x + 1) * 0.5 * r.width);
+      const ys = pts.map(v=>(1 - v.y) * 0.5 * r.height);
+      const x0 = Math.min(...xs) - 14, x1 = Math.max(...xs) + 14;
+      const y0 = Math.min(...ys) - 14, y1 = Math.max(...ys) + 14;
+      if(px >= x0 && px <= x1 && py >= y0 && py <= y1){
+        const area = (x1 - x0) * (y1 - y0);
+        if(area < bestArea){ bestArea = area; best = c; }
+      }
+    }
   });
-  return best.obj;
+  return best;
 }
 let dragStartObj = null, dragStartX = 0, dragStartZ = 0;
 /* 屏幕位移 → 地面位移：沿相机右方向与朝向拆开，两个轴都跟手 */
@@ -1945,13 +1979,14 @@ $('#zOut').addEventListener('click', ()=> setPodZoom(podZoom - 0.12));
 (()=>{
   const c = $('#gl');
   const pts = new Map();
-  let d0 = 0, z0 = 1, c0 = null;
+  let d0 = 0, z0 = 1, c0 = null, panTarget = null;
   c.addEventListener('pointerdown', e=>{
     pts.set(e.pointerId, {x:e.clientX, y:e.clientY});
     if(pts.size === 2){
       const v = [...pts.values()];
       d0 = Math.hypot(v[0].x-v[1].x, v[0].y-v[1].y); z0 = podZoom;
       c0 = {x:(v[0].x+v[1].x)/2, y:(v[0].y+v[1].y)/2};
+      panTarget = pickViewerAt(c0.x, c0.y) || pod;
       pinching = true;
     }
   }, {passive:true});
@@ -1961,9 +1996,9 @@ $('#zOut').addEventListener('click', ()=> setPodZoom(podZoom - 0.12));
     if(pts.size === 2){
       const v = [...pts.values()];
       const cx = (v[0].x + v[1].x) / 2, cy = (v[0].y + v[1].y) / 2;
-      if(pod && c0){
-        // 双指整体拖动 → 舱体在房间里平移（左右、前后都能走）
-        if(pod.visible) moveByDrag(pod, cx - c0.x, cy - c0.y);
+      if(panTarget && c0){
+        // 双指整体拖动 → 抓起谁就平移谁（人不会被舱体拖着走）
+        if(panTarget.visible !== false) moveByDrag(panTarget, cx - c0.x, cy - c0.y);
       }
       c0 = {x:cx, y:cy};
       if(d0 > 12){
@@ -1972,7 +2007,7 @@ $('#zOut').addEventListener('click', ()=> setPodZoom(podZoom - 0.12));
       }
     }
   }, {passive:true});
-  const drop = e=>{ pts.delete(e.pointerId); if(pts.size < 2){ d0 = 0; c0 = null; pinching = false; } };
+  const drop = e=>{ pts.delete(e.pointerId); if(pts.size < 2){ d0 = 0; c0 = null; panTarget = null; pinching = false; } };
   c.addEventListener('pointerup', drop); c.addEventListener('pointercancel', drop);
   c.addEventListener('wheel', e=>{
     if(!placed) return;
