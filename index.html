@@ -174,7 +174,7 @@ h1 em{font-style:normal;color:var(--amber)}
 .toast.on{opacity:1;transform:translate(-50%,-50%) scale(1)}
 .toast b{display:block;color:var(--amber);font-weight:600;margin-bottom:4px;font-size:11px;letter-spacing:.14em}
 
-.guide{position:absolute;left:50%;top:12%;transform:translateX(-50%);text-align:center;
+.guide{max-width:92vw;white-space:nowrap;line-height:1.6;text-align:center;position:absolute;left:50%;top:12%;transform:translateX(-50%);text-align:center;
   font-size:12.5px;letter-spacing:.06em;color:#EDE8DE;background:rgba(10,10,11,.6);
   padding:10px 14px;border:1px solid rgba(242,238,230,.16);display:none}
 .guide.on{display:block}
@@ -1654,7 +1654,7 @@ async function startCamMode(){
   floorGlow.position.set(0, 0.003, -4.2);
   floorGlow.scale.setScalar(1.7);
   applyPlanVisual();
-  $('#guide').textContent = '单指左右拖转舱体 · 上下拖调视角 · 捏合缩放';
+  $('#guide').textContent = '左右拖转舱体 · 上下拖调视角 · 双指拖挪位置 · 捏合缩放';
   $('#guide').classList.add('on');
   setTimeout(()=> $('#guide').classList.remove('on'), 4200);
   showPlaceBtn(true, '落地到我面前');
@@ -1885,6 +1885,10 @@ async function enterStage(preferAR){
   }
   startStageMode();
   startPlayback();
+  // 剧场模式同样给一条准确的操作提示，别让人以为只有左右一个手势
+  $('#guide').textContent = '左右拖转舱体 · 上下拖调视角 · 双指拖挪位置 · 捏合缩放';
+  $('#guide').classList.add('on');
+  setTimeout(()=> $('#guide').classList.remove('on'), 4600);
 }
 
 /* =========================================================
