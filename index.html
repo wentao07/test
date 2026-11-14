@@ -216,7 +216,7 @@ h1 em{font-style:normal;color:var(--amber)}
 .zoomctl button{width:42px;height:42px;border-radius:50%;border:1px solid rgba(240,166,75,.34);
   background:rgba(16,14,12,.72);color:#F0A64B;font-size:19px;line-height:1;
   -webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px);font-family:inherit;cursor:pointer}
-.zoomctl button:active{background:rgba(240,166,75,.18)} .zoomctl button.on{border-color:rgba(240,166,75,.9);color:#FFD6A5;background:rgba(240,166,75,.16)}
+.zoomctl button:active{background:rgba(240,166,75,.18)} 
 
 .endcta{margin:30px 0 0;display:flex;flex-direction:column;gap:10px}
 
@@ -347,7 +347,6 @@ h1 em{font-style:normal;color:var(--amber)}
       <span class="chip"><span class="dot"></span><b id="hPlan">标准</b> <span id="hPrice">$19.99</span></span>
       <span class="chip" id="hQuality">1080p</span>
       <span class="chip" id="hDevices">设备 1 / 2</span>
-      <span class="chip spacer" id="hAudio">立体声</span>
     </div>
     <div class="guide" id="guide">移动手机扫过地面 · 轻点放置观影舱</div>
     <div class="bot">
@@ -372,7 +371,6 @@ h1 em{font-style:normal;color:var(--amber)}
     </div>
   </div>
   <div class="zoomctl on" id="zoomctl">
-    <button id="zMove" aria-label="移动观影舱">移</button>
       <button id="zIn" aria-label="放大观影舱">+</button>
     <button id="zOut" aria-label="缩小观影舱">−</button>
     <span id="hZoom" style="display:none">100%</span>
@@ -467,7 +465,7 @@ const PLANS = {
   std: {key:'std', name:'标准', short:'标准版', price:'$19.99', priceN:19.99, quality:'1080p', devices:2,
         downloads:2, audio:'立体声', ads:false, grade:'mid', qNote:'1080p · 无广告'},
   pre: {key:'pre', name:'高级', short:'高级版', price:'$26.99', priceN:26.99, quality:'4K HDR', devices:4,
-        downloads:6, audio:'空间音频', ads:false, grade:'high', qNote:'4K · HDR · 空间音频'}
+        downloads:6, audio:'空间音频', ads:false, grade:'high', qNote:'4K · HDR'}
 };
 
 const TITLES = [
@@ -1011,26 +1009,14 @@ function init3D(){
     const dx = e.clientX-px, dy = e.clientY-py;
     px = e.clientX; py = e.clientY;
     const tgt0 = dragTarget || pod;
-    if(moveMode && tgt0){
-      // 平移：手指往右，物体往右走；手指往上，物体往远处走
-      const mPerPx = (2 * orbit.dist * Math.tan(camera.fov * Math.PI/360)) / Math.max(1, window.innerHeight);
-      const az = orbit.az;
-      const rx = Math.cos(az), rz = -Math.sin(az);   // 屏幕右方向
-      const fx = -Math.sin(az), fz = -Math.cos(az);  // 屏幕往里方向
-      const ax = (dx * rx + (-dy) * fx) * mPerPx;
-      const az2 = (dx * rz + (-dy) * fz) * mPerPx;
-      const nx = Math.max(-3.4, Math.min(3.4, tgt0.position.x + ax));
-      const nz = Math.max(-3.4, Math.min(3.4, tgt0.position.z + az2));
-      tgt0.position.x = nx; tgt0.position.z = nz;
-      if(tgt0 === pod){
-        blob.position.set(nx, 0.002, nz);
-        floorGlow.position.set(nx, 0.003, nz);
-      }
+    if(tgt0 && tgt0.userData && tgt0.userData.viewer){
+      // 旁边那台设备是独立的人：拖他是搬他的位置，不牵动舱体
+      moveByDrag(tgt0, dx, dy);
     }else{
       // 单指左右拖直接转舱体：手指往右，舱体就往右转，原地 360°
       if(tgt0 && Math.abs(dx) > 0.5) tgt0.rotation.y += dx * 0.008;
+      orbit.tpol = Math.max(0.98, Math.min(1.62, orbit.tpol + dy*0.004));
     }
-    orbit.tpol = Math.max(0.98, Math.min(1.62, orbit.tpol + dy*0.004));
   });
   canvasEl.addEventListener('pointerup', ()=>{ dragging = false; });
   canvasEl.addEventListener('wheel', e=>{
@@ -1266,8 +1252,6 @@ function applyPlanVisual(){
   $('#hQuality').textContent = p.qNote;
   $('#hDevices').textContent = '设备 ' + state.devices + ' / ' + p.devices;
   $('#hDevices').classList.toggle('warn', state.devices >= p.devices);
-  $('#hAudio').textContent = p.audio;
-  $('#hAudio').style.color = p.audio==='空间音频' ? '#F0A64B' : '#E7E2D8';
 
   kickTexture();
   prepareClips();
@@ -1743,7 +1727,6 @@ let podZoom = 1;
 let pinching = false;
 // 拖拽时手指按在谁身上就转谁：舱体，或者坐在旁边拿平板的那个人
 let dragTarget = null;
-let moveMode = false;      // 打开后单指拖拽 = 平移，关掉 = 原地旋转
 const dragRay = new THREE.Raycaster();
 function pickViewerAt(clientX, clientY){
   if(!companions || !companions.length || !camera || typeof THREE === 'undefined') return null;
@@ -1753,12 +1736,43 @@ function pickViewerAt(clientX, clientY){
   const nd = new THREE.Vector2(((clientX-r.left)/r.width)*2-1, -((clientY-r.top)/r.height)*2+1);
   dragRay.setFromCamera(nd, camera);
   const hits = dragRay.intersectObjects(companions, true);
-  if(!hits.length) return null;
-  let o = hits[0].object;
-  while(o && !o.userData.viewer) o = o.parent;
-  return o && o.userData.viewer ? o : null;
+  if(hits.length){
+    let o = hits[0].object;
+    while(o && !o.userData.viewer) o = o.parent;
+    if(o && o.userData.viewer) return o;
+  }
+  // 射线打空时按屏幕距离兜底：在人体附近按下也算抓到他，不会串到舱体上
+  const best = {obj:null, d:96};
+  companions.forEach(c=>{
+    const w = new THREE.Vector3(); c.getWorldPosition(w);
+    w.y += 1.02 * (c.scale ? c.scale.y : 1);
+    w.project(camera);
+    const sx = (w.x + 1) * 0.5 * r.width, sy = (1 - w.y) * 0.5 * r.height;
+    const d = Math.hypot(sx - (clientX - r.left), sy - (clientY - r.top));
+    if(d < best.d){ best.d = d; best.obj = c; }
+  });
+  return best.obj;
 }
 let dragStartObj = null, dragStartX = 0, dragStartZ = 0;
+/* 屏幕位移 → 地面位移：沿相机右方向与朝向拆开，两个轴都跟手 */
+function moveByDrag(obj, dx, dy){
+  if(!obj || !camera || typeof THREE === 'undefined') return;
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir); dir.y = 0;
+  if(dir.lengthSq() < 1e-6) return;
+  dir.normalize();
+  const rx = -dir.z, rz = dir.x;
+  const mPerPx = (2 * orbit.dist * Math.tan(camera.fov * Math.PI/360)) / Math.max(1, window.innerHeight);
+  const ax = (dx * rx + (-dy) * dir.x) * mPerPx;
+  const az = (dx * rz + (-dy) * dir.z) * mPerPx;
+  const nx = Math.max(-3.4, Math.min(3.4, obj.position.x + ax));
+  const nz = Math.max(-3.4, Math.min(3.4, obj.position.z + az));
+  obj.position.x = nx; obj.position.z = nz;
+  if(obj === pod){
+    blob.position.set(nx, 0.002, nz);
+    floorGlow.position.set(nx, 0.003, nz);
+  }
+}
 function setPodZoom(v){
   podZoom = Math.max(0.5, Math.min(2.2, v));
   if(pod && landT <= 0) pod.scale.setScalar(podZoom);
@@ -1926,13 +1940,6 @@ $('#btnPlace').addEventListener('click', ()=>{
 });
 
 /* 缩放：按钮 / 双指捏合 / 滚轮 */
-$('#zMove').addEventListener('click', ()=>{
-  moveMode = !moveMode;
-  $('#zMove').classList.toggle('on', moveMode);
-  toast(moveMode ? '移动模式' : '旋转模式',
-    moveMode ? '按住舱体或旁边的人拖动，就能换个位置；再点一次「移」回到旋转。'
-             : '按住拖动，舱体和人原地转圈。', 2600);
-});
 $('#zIn').addEventListener('click', ()=> setPodZoom(podZoom + 0.12));
 $('#zOut').addEventListener('click', ()=> setPodZoom(podZoom - 0.12));
 (()=>{
@@ -1955,8 +1962,8 @@ $('#zOut').addEventListener('click', ()=> setPodZoom(podZoom - 0.12));
       const v = [...pts.values()];
       const cx = (v[0].x + v[1].x) / 2, cy = (v[0].y + v[1].y) / 2;
       if(pod && c0){
-        // 双指整体左右平移 → 舱体绕自身中心旋转，无角度上限
-        if(pod.visible) pod.rotation.y += (cx - c0.x) * 0.011;
+        // 双指整体拖动 → 舱体在房间里平移（左右、前后都能走）
+        if(pod.visible) moveByDrag(pod, cx - c0.x, cy - c0.y);
       }
       c0 = {x:cx, y:cy};
       if(d0 > 12){
